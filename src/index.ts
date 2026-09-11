@@ -1,4 +1,4 @@
-import { User } from 'nengi'
+import { User, UserConnectionState } from 'nengi'
 import type {
     BinaryAdapter,
     BinaryPayload,
@@ -36,6 +36,8 @@ export interface BunServer<Data = unknown> {
 export type BunWebSocketHandler<Data = unknown> = {
     open?(socket: BunServerWebSocket<Data>): void
     message?(socket: BunServerWebSocket<Data>, message: string | Uint8Array): void
+    ping?(socket: BunServerWebSocket<Data>, message: Uint8Array): void
+    pong?(socket: BunServerWebSocket<Data>, message: Uint8Array): void
     close?(socket: BunServerWebSocket<Data>, code: number, reason: string): void
     error?(socket: BunServerWebSocket<Data>, error: Error): void
     maxPayloadLength?: number
@@ -126,13 +128,15 @@ export class BunInstanceAdapter implements IServerNetworkAdapter<BinaryPayload, 
         }
 
         this.websocket = {
-            maxPayloadLength: config.maxPayloadLength ?? 16 * 1024 * 1024,
+            maxPayloadLength: config.maxPayloadLength ?? network.instance.limits.maxPacketBytes,
             backpressureLimit: this.maxBufferedBytes,
             closeOnBackpressureLimit: true,
             idleTimeout: config.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_SECONDS,
             perMessageDeflate: config.perMessageDeflate ?? false,
             open: socket => this.onOpen(socket),
             message: (socket, message) => this.onMessage(socket, message),
+            ping: (socket, message) => { if (socket.data.user) this.network.onTransportControl(socket.data.user, message.byteLength) },
+            pong: (socket, message) => { if (socket.data.user) this.network.onTransportControl(socket.data.user, message.byteLength) },
             close: (socket, code, reason) => this.onClose(socket, reason),
             error: (socket, error) => this.onError(socket, error)
         }
@@ -163,10 +167,25 @@ export class BunInstanceAdapter implements IServerNetworkAdapter<BinaryPayload, 
 
     upgrade(request: Request, server: BunServer<BunInstanceSocketData>): Response | undefined {
         const remoteAddress = server.requestIP(request)?.address ?? null
-        const accepted = server.upgrade(request, {
-            data: { adapter: this, user: null, remoteAddress }
-        })
-        return accepted ? undefined : new Response('WebSocket upgrade failed.', { status: 400 })
+        // Reserve core admission before creating a native WebSocket. Refusals
+        // need no socket or queued denial response on this HTTP upgrade path.
+        const user = new User(null, this)
+        user.remoteAddress = remoteAddress
+        this.network.onOpen(user)
+        if (user.connectionState === UserConnectionState.Closed) {
+            return new Response('Connection capacity exceeded.', { status: 503 })
+        }
+        try {
+            const accepted = server.upgrade(request, {
+                data: { adapter: this, user, remoteAddress }
+            })
+            if (accepted) return undefined
+            this.network.onClose(user)
+            return new Response('WebSocket upgrade failed.', { status: 400 })
+        } catch (error) {
+            this.network.onClose(user, error)
+            throw error
+        }
     }
 
     send(user: User, payload: ArrayBuffer) {
@@ -192,12 +211,12 @@ export class BunInstanceAdapter implements IServerNetworkAdapter<BinaryPayload, 
 
     disconnect(user: User, reason: unknown) {
         const socket = user.socket as BunServerWebSocket<BunInstanceSocketData>
-        socket.close(1000, closeReason(reason))
+        socket?.close(1000, closeReason(reason))
     }
 
     terminate(user: User) {
         const socket = user.socket as BunServerWebSocket<BunInstanceSocketData>
-        socket.terminate()
+        socket?.terminate()
     }
 
     async close() {
@@ -208,15 +227,20 @@ export class BunInstanceAdapter implements IServerNetworkAdapter<BinaryPayload, 
 
     private onOpen(socket: BunServerWebSocket<BunInstanceSocketData>) {
         const data = socket.data
-        const user = new User(socket, data.adapter)
+        const user = data.user ?? new User(socket, data.adapter)
+        user.socket = socket
         data.user = user
         user.remoteAddress = data.remoteAddress ?? socket.remoteAddress ?? null
+        if (user.connectionState === UserConnectionState.Closed) {
+            socket.terminate()
+            return
+        }
         data.adapter.network.onOpen(user)
     }
 
     private onMessage(socket: BunServerWebSocket<BunInstanceSocketData>, message: string | Uint8Array) {
         const { adapter, user } = socket.data
-        if (!user) {
+        if (!user || user.connectionState === UserConnectionState.Closed) {
             return
         }
         if (!isBinaryPayload(message)) {

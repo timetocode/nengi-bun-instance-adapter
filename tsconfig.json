@@ -7,7 +7,16 @@
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
+    "paths": {
+      "nengi": [
+        "../nengi/build"
+      ],
+      "nengi-dataviews": [
+        "../nengi-dataviews/build"
+      ]
+    }
   },
   "include": [
     "src/**/*"

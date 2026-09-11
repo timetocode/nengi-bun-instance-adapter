@@ -1,6 +1,6 @@
 {
   "name": "nengi-bun-instance-adapter",
-  "version": "2.0.0-rc.126",
+  "version": "2.0.0-rc.127",
   "description": "Native Bun server adapter for nengi instances",
   "main": "./build/index.js",
   "types": "./build/index.d.ts",
@@ -33,15 +33,15 @@
     "url": "https://github.com/timetocode/nengi-bun-instance-adapter/issues"
   },
   "dependencies": {
-    "nengi-dataviews": "2.0.0-rc.126"
+    "nengi-dataviews": "2.0.0-rc.127"
   },
   "devDependencies": {
-    "nengi": "2.0.0-rc.126",
-    "nengi-websocket-client-adapter": "2.0.0-rc.126",
+    "nengi": "2.0.0-rc.127",
+    "nengi-websocket-client-adapter": "2.0.0-rc.127",
     "typescript": "^5.9.3"
   },
   "peerDependencies": {
-    "nengi": "2.0.0-rc.126"
+    "nengi": "2.0.0-rc.127"
   },
   "engines": {
     "bun": ">=1.3.0"
